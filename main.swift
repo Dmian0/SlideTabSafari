@@ -1,5 +1,6 @@
 import Cocoa
 import CoreGraphics
+import ServiceManagement
 
 // Log class removed for final version.
 
@@ -169,6 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var eventTapPort: CFMachPort?
     var directionMenuItem: NSMenuItem!
+    var autostartMenuItem: NSMenuItem!
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // Register default preference (true = natural direction)
@@ -178,6 +180,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.title = "⇥"
+        }
+        
+        // Auto-enable Launch at Login on first run
+        if #available(macOS 13.0, *) {
+            if !UserDefaults.standard.bool(forKey: "hasLaunchedBefore") {
+                UserDefaults.standard.set(true, forKey: "hasLaunchedBefore")
+                if SMAppService.mainApp.status != .enabled {
+                    try? SMAppService.mainApp.register()
+                }
+            }
         }
         
         let menu = NSMenu()
@@ -191,6 +203,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(directionMenuItem)
         
         menu.addItem(NSMenuItem.separator())
+        
+        // Add Launch at Login toggle
+        if #available(macOS 13.0, *) {
+            autostartMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleAutostart(_:)), keyEquivalent: "")
+            autostartMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            menu.addItem(autostartMenuItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+        
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
         
@@ -202,6 +223,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let newValue = !current
         UserDefaults.standard.set(newValue, forKey: "naturalSwipeDirection")
         sender.state = newValue ? .on : .off
+    }
+    
+    @available(macOS 13.0, *)
+    @objc func toggleAutostart(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+                sender.state = .off
+            } else {
+                try SMAppService.mainApp.register()
+                sender.state = .on
+            }
+        } catch {
+            print("Failed to toggle autostart: \(error)")
+        }
     }
     
     var hasPromptedAccessibility = false
