@@ -21,7 +21,7 @@ Since this application intercepts global hardware events, it requires Accessibil
 ### Building the App
 1. Clone this repository:
    ```bash
-   git clone https://github.com/TU_USUARIO/SlideTabSafari.git
+   git clone https://github.com/Dmian0/SlideTabSafari.git
    cd SlideTabSafari
    ```
 2. Run the build script to compile the Swift source and generate the code-signed App bundle (`SlideTabSafari.app`):
