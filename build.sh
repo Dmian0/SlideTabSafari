@@ -17,8 +17,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Copy Info.plist
+# Copy Info.plist and Icon
 cp Info.plist "$APP_BUNDLE/Contents/"
+if [ -f "AppIcon.icns" ]; then
+    cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
+fi
 
 echo "Build complete. Signing..."
 codesign --force --deep --sign - "$APP_BUNDLE"

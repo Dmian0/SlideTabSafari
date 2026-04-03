@@ -23,6 +23,10 @@ class GestureTracker {
     let verticalTolerance: CGFloat = 10.0
     private var accumulatedDeltaY: CGFloat = 0.0
     
+    private var isNaturalDirection: Bool {
+        return UserDefaults.standard.bool(forKey: "naturalSwipeDirection")
+    }
+
     /// Process a scroll wheel CGEvent.
     /// Returns `true` if the event should be CONSUMED (blocked from reaching Safari).
     func processScrollEvent(_ event: CGEvent) -> Bool {
@@ -67,7 +71,12 @@ class GestureTracker {
             
             // Check if horizontal delta exceeds threshold
             if !hasFired && abs(accumulatedDeltaX) > horizontalThreshold {
-                let goNext = accumulatedDeltaX < 0 // negative deltaX = swipe left = next tab
+                let isRightSwipe = accumulatedDeltaX > 0
+                
+                // Natural Direction: Right Swipe -> Previous Tab (goNext = false)
+                // Standard Direction: Right Swipe -> Next Tab (goNext = true)
+                let goNext = isNaturalDirection ? !isRightSwipe : isRightSwipe
+                
                 sendTabSwitch(next: goNext)
                 hasFired = true
             }
@@ -159,8 +168,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     var statusItem: NSStatusItem!
     var eventTapPort: CFMachPort?
+    var directionMenuItem: NSMenuItem!
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Register default preference (true = natural direction)
+        UserDefaults.standard.register(defaults: ["naturalSwipeDirection": true])
+        
         // Setup menu bar icon
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -170,10 +183,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "SlideTabSafari v2", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        
+        // Add Swipe Direction toggle
+        let isNatural = UserDefaults.standard.bool(forKey: "naturalSwipeDirection")
+        directionMenuItem = NSMenuItem(title: "Natural Swipe Direction", action: #selector(toggleSwipeDirection(_:)), keyEquivalent: "")
+        directionMenuItem.state = isNatural ? .on : .off
+        menu.addItem(directionMenuItem)
+        
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
         
         checkAccessibility()
+    }
+    
+    @objc func toggleSwipeDirection(_ sender: NSMenuItem) {
+        let current = UserDefaults.standard.bool(forKey: "naturalSwipeDirection")
+        let newValue = !current
+        UserDefaults.standard.set(newValue, forKey: "naturalSwipeDirection")
+        sender.state = newValue ? .on : .off
     }
     
     var hasPromptedAccessibility = false

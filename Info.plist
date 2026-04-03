@@ -24,5 +24,7 @@
     <string>SlideTabSafari needs to send Apple Events to Safari to change tabs.</string>
     <key>NSAccessibilityUsageDescription</key>
     <string>SlideTabSafari needs Accessibility access to detect trackpad swipes and switch tabs.</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
