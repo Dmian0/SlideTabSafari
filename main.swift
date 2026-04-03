@@ -16,8 +16,14 @@ class GestureTracker {
     private var hasFired = false
     
     // Threshold: how much horizontal delta before we trigger a tab switch.
-    // Increase this value if the gesture triggers too easily.
-    let horizontalThreshold: CGFloat = 50.0
+    var horizontalThreshold: CGFloat {
+        let level = UserDefaults.standard.integer(forKey: "sensitivityLevel")
+        switch level {
+        case 2: return 30.0 // High (quick)
+        case 0: return 80.0 // Low (needs strong swipe)
+        default: return 50.0 // Medium (default)
+        }
+    }
     
     // Maximum vertical delta allowed during a horizontal swipe.
     // If the user scrolls more vertically than this, it's a normal page scroll.
@@ -167,20 +173,21 @@ func eventTapCallback(
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     
-    var statusItem: NSStatusItem!
+    var statusItem: NSStatusItem?
     var eventTapPort: CFMachPort?
     var directionMenuItem: NSMenuItem!
     var autostartMenuItem: NSMenuItem!
+    var lowSensitivityItem: NSMenuItem!
+    var medSensitivityItem: NSMenuItem!
+    var highSensitivityItem: NSMenuItem!
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        // Register default preference (true = natural direction)
-        UserDefaults.standard.register(defaults: ["naturalSwipeDirection": true])
-        
-        // Setup menu bar icon
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.title = "⇥"
-        }
+        // Register default preference
+        UserDefaults.standard.register(defaults: [
+            "naturalSwipeDirection": true,
+            "sensitivityLevel": 1,
+            "hideMenuIcon": false
+        ])
         
         // Auto-enable Launch at Login on first run
         if #available(macOS 13.0, *) {
@@ -190,6 +197,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     try? SMAppService.mainApp.register()
                 }
             }
+        }
+        
+        if !UserDefaults.standard.bool(forKey: "hideMenuIcon") {
+            setupMenuBarIcon()
+        }
+        
+        checkAccessibility()
+    }
+    
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // When user opens the app again from Finder, show the menu icon again
+        UserDefaults.standard.set(false, forKey: "hideMenuIcon")
+        if statusItem == nil {
+            setupMenuBarIcon()
+        }
+        return true
+    }
+    
+    func setupMenuBarIcon() {
+        if statusItem != nil { return }
+        
+        // Setup menu bar icon
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = statusItem?.button {
+            button.title = "⇥"
         }
         
         let menu = NSMenu()
@@ -202,6 +234,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         directionMenuItem.state = isNatural ? .on : .off
         menu.addItem(directionMenuItem)
         
+        // Add Sensitivity Submenu
+        let sensitivityItem = NSMenuItem(title: "Sensitivity", action: nil, keyEquivalent: "")
+        let sensitivityMenu = NSMenu()
+        
+        lowSensitivityItem = NSMenuItem(title: "Low (Requires long swipe)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
+        lowSensitivityItem.tag = 0
+        medSensitivityItem = NSMenuItem(title: "Medium (Default)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
+        medSensitivityItem.tag = 1
+        highSensitivityItem = NSMenuItem(title: "High (Quick swipe)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
+        highSensitivityItem.tag = 2
+        
+        updateSensitivityCheckmarks()
+        
+        sensitivityMenu.addItem(lowSensitivityItem)
+        sensitivityMenu.addItem(medSensitivityItem)
+        sensitivityMenu.addItem(highSensitivityItem)
+        sensitivityItem.submenu = sensitivityMenu
+        menu.addItem(sensitivityItem)
+        
         menu.addItem(NSMenuItem.separator())
         
         // Add Launch at Login toggle
@@ -209,13 +260,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             autostartMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleAutostart(_:)), keyEquivalent: "")
             autostartMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             menu.addItem(autostartMenuItem)
-            menu.addItem(NSMenuItem.separator())
         }
         
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
+        let hideIconItem = NSMenuItem(title: "Hide Menu Bar Icon...", action: #selector(hideMenuIcon(_:)), keyEquivalent: "")
+        menu.addItem(hideIconItem)
         
-        checkAccessibility()
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        statusItem?.menu = menu
     }
     
     @objc func toggleSwipeDirection(_ sender: NSMenuItem) {
@@ -237,6 +289,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch {
             print("Failed to toggle autostart: \(error)")
+        }
+    }
+    
+    @objc func changeSensitivity(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(sender.tag, forKey: "sensitivityLevel")
+        updateSensitivityCheckmarks()
+    }
+    
+    func updateSensitivityCheckmarks() {
+        let level = UserDefaults.standard.integer(forKey: "sensitivityLevel")
+        lowSensitivityItem?.state = (level == 0) ? .on : .off
+        medSensitivityItem?.state = (level == 1) ? .on : .off
+        highSensitivityItem?.state = (level == 2) ? .on : .off
+    }
+    
+    @objc func hideMenuIcon(_ sender: NSMenuItem) {
+        let alert = NSAlert()
+        alert.messageText = "Hide Menu Bar Icon"
+        alert.informativeText = "The menu bar icon will be hidden.\n\nTo show it again and access settings, simply open 'SlideTabSafari.app' from your Applications folder or Finder again."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Hide Icon")
+        alert.addButton(withTitle: "Cancel")
+        
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        
+        if response == .alertFirstButtonReturn {
+            UserDefaults.standard.set(true, forKey: "hideMenuIcon")
+            statusItem = nil
         }
     }
     
