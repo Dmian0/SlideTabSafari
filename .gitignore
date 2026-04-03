@@ -1,0 +1,8 @@
+# Ignore the built application bundle
+SlideTabSafari.app/
+*.app
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
