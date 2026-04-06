@@ -1,8 +1,8 @@
 import Cocoa
 import CoreGraphics
 import ServiceManagement
-
-// Log class removed for final version.
+import os
+import SwiftUI
 
 // MARK: - Gesture State Machine
 // Tracks horizontal scroll gesture phases and accumulates delta
@@ -36,7 +36,7 @@ class GestureTracker {
 
     /// Process a scroll wheel CGEvent.
     /// Returns `true` if the event should be CONSUMED (blocked from reaching Safari).
-    func processScrollEvent(_ event: CGEvent) -> Bool {
+    func processScrollEvent(_ event: CGEvent, bundleId: String) -> Bool {
         // Get scroll phases from the event
         let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
         let momentumPhase = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
@@ -84,7 +84,7 @@ class GestureTracker {
                 // Standard Direction: Right Swipe -> Next Tab (goNext = true)
                 let goNext = isNaturalDirection ? !isRightSwipe : isRightSwipe
                 
-                sendTabSwitch(next: goNext)
+                sendTabSwitch(next: goNext, bundleId: bundleId)
                 hasFired = true
             }
             
@@ -107,7 +107,7 @@ class GestureTracker {
         }
     }
     
-    private func sendTabSwitch(next: Bool) {
+    private func sendTabSwitch(next: Bool, bundleId: String) {
         // Control+Tab = next tab, Control+Shift+Tab = previous tab in Safari
         let keyCode: CGKeyCode = 48 // 48 = Tab key
         
@@ -123,7 +123,8 @@ class GestureTracker {
         
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
-        TabSwitchHUD.shared.show(next: next)
+        
+        TabSwitchHUD.shared.show(next: next, bundleId: bundleId)
     }
 }
 
@@ -137,8 +138,11 @@ class TabSwitchHUD {
     private var arrowLabel: NSTextField?
     private var textLabel: NSTextField?
     
+    // Counter to avoid race conditions with multiple rapid swipes
+    private var tabSwitchCount: Int = 0
+    
     private func createWindow() {
-        let hudWidth: CGFloat = 180
+        let hudWidth: CGFloat = 300 // Increased from 180 to fit long tab titles
         let hudHeight: CGFloat = 90
         
         guard let screen = NSScreen.main else { return }
@@ -180,7 +184,8 @@ class TabSwitchHUD {
         text.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         text.textColor = NSColor.white.withAlphaComponent(0.75)
         text.alignment = .center
-        text.frame = NSRect(x: 0, y: 10, width: hudWidth, height: 18)
+        text.lineBreakMode = .byTruncatingTail
+        text.frame = NSRect(x: 10, y: 10, width: hudWidth - 20, height: 18)
         
         visualEffect.addSubview(arrow)
         visualEffect.addSubview(text)
@@ -191,7 +196,7 @@ class TabSwitchHUD {
         self.textLabel = text
     }
     
-    func show(next: Bool) {
+    func show(next: Bool, bundleId: String) {
         guard UserDefaults.standard.bool(forKey: "showHUD") else { return }
         
         DispatchQueue.main.async {
@@ -202,6 +207,14 @@ class TabSwitchHUD {
             // Update content
             self.arrowLabel?.stringValue = next ? "▶" : "◀"
             self.textLabel?.stringValue = next ? "Next Tab" : "Previous Tab"
+            
+            self.tabSwitchCount += 1
+            let currentCount = self.tabSwitchCount
+            
+            // Fetch tab title asynchronously
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15) {
+                self.fetchTabTitle(bundleId: bundleId, switchCount: currentCount)
+            }
             
             // Reset dismiss timer
             self.dismissTimer?.invalidate()
@@ -222,6 +235,41 @@ class TabSwitchHUD {
                     self.hudWindow?.animator().alphaValue = 0.0
                 }) {
                     self.hudWindow?.orderOut(nil)
+                }
+            }
+        }
+    }
+    
+    private func fetchTabTitle(bundleId: String, switchCount: Int) {
+        let scriptString: String?
+        
+        let chromiumBrowsers = [
+            "com.google.Chrome", "com.google.Chrome.canary", "com.brave.Browser",
+            "com.microsoft.edgemac", "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
+            "com.operasoftware.Opera"
+        ]
+        
+        let safariBrowsers = ["com.apple.Safari", "com.apple.SafariTechnologyPreview"]
+        
+        if chromiumBrowsers.contains(bundleId) {
+            scriptString = "tell application id \"\(bundleId)\" to return title of active tab of front window"
+        } else if safariBrowsers.contains(bundleId) {
+            scriptString = "tell application id \"\(bundleId)\" to return name of current tab of front window"
+        } else {
+            scriptString = nil
+        }
+        
+        guard let source = scriptString else { return }
+        
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: source) {
+            let output = scriptObject.executeAndReturnError(&error)
+            if error == nil, let title = output.stringValue, !title.isEmpty {
+                DispatchQueue.main.async {
+                    // Update only if this is still the result of the same swipe
+                    if self.tabSwitchCount == switchCount {
+                        self.textLabel?.stringValue = title
+                    }
                 }
             }
         }
@@ -459,9 +507,6 @@ func eventTapCallback(
         return Unmanaged.passUnretained(event)
     }
     
-    // Safely unwrap phases if needed
-
-    
     // Only act when a supported browser is frontmost
     guard let activeApp = NSWorkspace.shared.frontmostApplication,
           let bundleId = activeApp.bundleIdentifier,
@@ -470,7 +515,7 @@ func eventTapCallback(
     }
     
     // Process through our gesture tracker
-    let shouldConsume = GestureTracker.shared.processScrollEvent(event)
+    let shouldConsume = GestureTracker.shared.processScrollEvent(event, bundleId: bundleId)
     
     if shouldConsume {
         return nil // CONSUME: Safari never sees this event
@@ -485,11 +530,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     var statusItem: NSStatusItem?
     var eventTapPort: CFMachPort?
-    var directionMenuItem: NSMenuItem!
-    var autostartMenuItem: NSMenuItem!
-    var lowSensitivityItem: NSMenuItem!
-    var medSensitivityItem: NSMenuItem!
-    var highSensitivityItem: NSMenuItem!
     var hudToggleItem: NSMenuItem!
     var onboardingController: OnboardingWindowController?
     
@@ -522,6 +562,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingController?.showIfNeeded()
         
         checkAccessibility()
+        
+        // Listen to preference changes (e.g., from SwiftUI view)
+        NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged), name: UserDefaults.didChangeNotification, object: nil)
+    }
+    
+    @objc func defaultsChanged() {
+        if UserDefaults.standard.bool(forKey: "hideMenuIcon") {
+            if let item = statusItem {
+                NSStatusBar.system.removeStatusItem(item)
+                statusItem = nil
+            }
+        } else {
+            setupMenuBarIcon()
+        }
+        // Sync the fast toggle in the menu
+        hudToggleItem?.state = UserDefaults.standard.bool(forKey: "showHUD") ? .on : .off
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -543,100 +599,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "SlideTabSafari v3", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "SlideTabSafari v4", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         
-        // Add Swipe Direction toggle
-        let isNatural = UserDefaults.standard.bool(forKey: "naturalSwipeDirection")
-        directionMenuItem = NSMenuItem(title: "Natural Swipe Direction", action: #selector(toggleSwipeDirection(_:)), keyEquivalent: "")
-        directionMenuItem.state = isNatural ? .on : .off
-        menu.addItem(directionMenuItem)
+        let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(openPreferences), keyEquivalent: ",")
+        menu.addItem(prefsItem)
         
-        // Add Sensitivity Submenu
-        let sensitivityItem = NSMenuItem(title: "Sensitivity", action: nil, keyEquivalent: "")
-        let sensitivityMenu = NSMenu()
-        
-        lowSensitivityItem = NSMenuItem(title: "Low (Requires long swipe)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
-        lowSensitivityItem.tag = 0
-        medSensitivityItem = NSMenuItem(title: "Medium (Default)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
-        medSensitivityItem.tag = 1
-        highSensitivityItem = NSMenuItem(title: "High (Quick swipe)", action: #selector(changeSensitivity(_:)), keyEquivalent: "")
-        highSensitivityItem.tag = 2
-        
-        updateSensitivityCheckmarks()
-        
-        sensitivityMenu.addItem(lowSensitivityItem)
-        sensitivityMenu.addItem(medSensitivityItem)
-        sensitivityMenu.addItem(highSensitivityItem)
-        sensitivityItem.submenu = sensitivityMenu
-        menu.addItem(sensitivityItem)
-        
-        // Add HUD toggle
         let isHUDEnabled = UserDefaults.standard.bool(forKey: "showHUD")
         hudToggleItem = NSMenuItem(title: "Show Tab Switch HUD", action: #selector(toggleHUD(_:)), keyEquivalent: "")
         hudToggleItem.state = isHUDEnabled ? .on : .off
         menu.addItem(hudToggleItem)
-        
-        // Add Browsers submenu
-        let browsersItem = NSMenuItem(title: "Browsers", action: nil, keyEquivalent: "")
-        let browsersMenu = NSMenu()
-        for browser in BrowserRegistry.shared.supportedBrowsers {
-            let item = NSMenuItem(title: browser.name, action: #selector(toggleBrowser(_:)), keyEquivalent: "")
-            item.representedObject = browser.bundleId
-            item.state = BrowserRegistry.shared.isEnabled(browser.bundleId) ? .on : .off
-            browsersMenu.addItem(item)
-        }
-        browsersItem.submenu = browsersMenu
-        menu.addItem(browsersItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // Add Launch at Login toggle
-        if #available(macOS 13.0, *) {
-            autostartMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleAutostart(_:)), keyEquivalent: "")
-            autostartMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-            menu.addItem(autostartMenuItem)
-        }
-        
-        let hideIconItem = NSMenuItem(title: "Hide Menu Bar Icon...", action: #selector(hideMenuIcon(_:)), keyEquivalent: "")
-        menu.addItem(hideIconItem)
         
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
     }
     
-    @objc func toggleSwipeDirection(_ sender: NSMenuItem) {
-        let current = UserDefaults.standard.bool(forKey: "naturalSwipeDirection")
-        let newValue = !current
-        UserDefaults.standard.set(newValue, forKey: "naturalSwipeDirection")
-        sender.state = newValue ? .on : .off
-    }
-    
-    @available(macOS 13.0, *)
-    @objc func toggleAutostart(_ sender: NSMenuItem) {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-                sender.state = .off
-            } else {
-                try SMAppService.mainApp.register()
-                sender.state = .on
-            }
-        } catch {
-            print("Failed to toggle autostart: \(error)")
-        }
-    }
-    
-    @objc func changeSensitivity(_ sender: NSMenuItem) {
-        UserDefaults.standard.set(sender.tag, forKey: "sensitivityLevel")
-        updateSensitivityCheckmarks()
-    }
-    
-    @objc func toggleBrowser(_ sender: NSMenuItem) {
-        guard let bundleId = sender.representedObject as? String else { return }
-        let newValue = BrowserRegistry.shared.toggle(bundleId)
-        sender.state = newValue ? .on : .off
+    @objc func openPreferences() {
+        PreferencesWindowController.shared.show()
     }
     
     @objc func toggleHUD(_ sender: NSMenuItem) {
@@ -644,30 +624,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let newValue = !current
         UserDefaults.standard.set(newValue, forKey: "showHUD")
         sender.state = newValue ? .on : .off
-    }
-    
-    func updateSensitivityCheckmarks() {
-        let level = UserDefaults.standard.integer(forKey: "sensitivityLevel")
-        lowSensitivityItem?.state = (level == 0) ? .on : .off
-        medSensitivityItem?.state = (level == 1) ? .on : .off
-        highSensitivityItem?.state = (level == 2) ? .on : .off
-    }
-    
-    @objc func hideMenuIcon(_ sender: NSMenuItem) {
-        let alert = NSAlert()
-        alert.messageText = "Hide Menu Bar Icon"
-        alert.informativeText = "The menu bar icon will be hidden.\n\nTo show it again and access settings, simply open 'SlideTabSafari.app' from your Applications folder or Finder again."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Hide Icon")
-        alert.addButton(withTitle: "Cancel")
-        
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
-        
-        if response == .alertFirstButtonReturn {
-            UserDefaults.standard.set(true, forKey: "hideMenuIcon")
-            statusItem = nil
-        }
     }
     
     var hasPromptedAccessibility = false
@@ -718,6 +674,155 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+}
+
+// MARK: - SwiftUI Preferences Window
+
+struct PreferencesView: View {
+    @AppStorage("naturalSwipeDirection") var naturalSwipeDirection = true
+    @AppStorage("sensitivityLevel") var sensitivityLevel = 1
+    @AppStorage("hideMenuIcon") var hideMenuIcon = false
+    @AppStorage("showHUD") var showHUD = true
+    
+    var autostartBinding: Binding<Bool> {
+        Binding(
+            get: {
+                if #available(macOS 13.0, *) {
+                    return SMAppService.mainApp.status == .enabled
+                }
+                return false
+            },
+            set: { newValue in
+                if #available(macOS 13.0, *) {
+                    do {
+                        if newValue {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        print("Failed to update autostart: \(error)")
+                    }
+                }
+            }
+        )
+    }
+    
+    var body: some View {
+        TabView {
+            // General Tab
+            Form {
+                Section {
+                    Picker("Swipe Direction:", selection: $naturalSwipeDirection) {
+                        Text("Natural").tag(true)
+                        Text("Standard").tag(false)
+                    }
+                    .pickerStyle(.radioGroup)
+                    
+                    Picker("Sensitivity:", selection: $sensitivityLevel) {
+                        Text("Low (requires long swipe)").tag(0)
+                        Text("Medium (default)").tag(1)
+                        Text("High (quick swipe)").tag(2)
+                    }
+                } header: {
+                    Text("Gestures")
+                        .font(.headline)
+                }
+                .padding(.bottom, 10)
+                
+                Section {
+                    Toggle("Show Tab Switch HUD", isOn: $showHUD)
+                    Toggle("Hide Menu Bar Icon", isOn: Binding(
+                        get: { hideMenuIcon },
+                        set: {
+                            if $0 {
+                                // Add confirmation alert when attempting to hide from Prefs
+                                let alert = NSAlert()
+                                alert.messageText = "Hide Menu Bar Icon?"
+                                alert.informativeText = "If you hide the icon, the app will continue to run in the background. To show the icon again, simply reopen the app from your Applications folder."
+                                alert.addButton(withTitle: "Hide")
+                                alert.addButton(withTitle: "Cancel")
+                                if alert.runModal() == .alertFirstButtonReturn {
+                                    hideMenuIcon = true
+                                }
+                            } else {
+                                hideMenuIcon = false
+                            }
+                        }
+                    ))
+                    if #available(macOS 13.0, *) {
+                        Toggle("Launch at Login", isOn: autostartBinding)
+                    }
+                } header: {
+                    Text("Appearance & System")
+                        .font(.headline)
+                }
+            }
+            .padding(20)
+            .tabItem {
+                Label("General", systemImage: "gear")
+            }
+            
+            // Browsers Tab
+            Form {
+                Text("Select which browsers to enable gesture support for:")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.bottom, 10)
+                
+                ForEach(BrowserRegistry.shared.supportedBrowsers, id: \.bundleId) { browser in
+                    ToggleBrowserRow(browser: browser)
+                }
+            }
+            .padding(20)
+            .tabItem {
+                Label("Browsers", systemImage: "safari")
+            }
+        }
+        .frame(width: 480, height: 350)
+    }
+}
+
+struct ToggleBrowserRow: View {
+    let browser: BrowserInfo
+    @AppStorage var isEnabled: Bool
+    
+    init(browser: BrowserInfo) {
+        self.browser = browser
+        self._isEnabled = AppStorage(wrappedValue: true, "browser_\(browser.bundleId)")
+    }
+    
+    var body: some View {
+        Toggle(browser.name, isOn: $isEnabled)
+    }
+}
+
+class PreferencesWindowController: NSWindowController {
+    static let shared = PreferencesWindowController()
+    
+    init() {
+        let hostingController = NSHostingController(rootView: PreferencesView())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 350),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.center()
+        window.title = "SlideTabSafari Preferences"
+        window.contentViewController = hostingController
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    func show() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

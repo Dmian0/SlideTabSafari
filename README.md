@@ -11,6 +11,7 @@ Natively in macOS, performing a two-finger horizontal swipe in Safari triggers t
 ## Features
 
 - **🌐 Multi-Browser Support** — Works with 10 browsers out of the box: Safari, Chrome, Brave, Arc, Firefox, Edge, Opera, Vivaldi, Safari Technology Preview, and Chrome Canary.
+- **⚙️ SwiftUI Preferences** — A beautiful native SwiftUI preferences window (`Cmd+,`) to manage all your gestures, HUD settings, and browser toggles.
 - **⚡ Zero Configuration** — Works out of the box with standard macOS keyboard shortcuts (`Control+Tab`). Layout independent.
 - **🔇 Silent & Unobtrusive** — Runs entirely in the background from your Menu bar. No Dock icon, no messy panels.
 - **📊 Smart Resource Usage** — Idles with almost 0 CPU usage because it only evaluates `CGEvent` scrolls when a supported browser is currently the active application.
@@ -73,14 +74,14 @@ To intercept trackpad events and simulate keystrokes, macOS requires explicit co
 - Open any supported browser with multiple tabs.
 - Perform a **two-finger horizontal swipe** on your trackpad.
 - The app will seamlessly switch to the adjacent tab instead of navigating the page history.
-- A visual **HUD overlay** briefly shows the direction of the switch.
-- Click the `⇥` icon in your menu bar to access all settings:
+- A visual **HUD overlay** briefly shows the title of the destination tab.
+- Click the `⇥` icon in your menu bar to quickly toggle the HUD on/off or access the full **Preferences...** window.
+- In **Preferences**:
   - Toggle swipe direction
   - Adjust sensitivity
-  - Enable/disable the HUD
-  - Enable/disable specific browsers
+  - Enable/disable the HUD or completely Hide the Menu bar icon
+  - Individual toggles for enabling/disabling specific browsers
   - Launch at Login
-  - Hide the menu bar icon
 
 ## How It Works Under The Hood
 
