@@ -123,7 +123,264 @@ class GestureTracker {
         
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
-        // print("Tab switched (next: \(next))")
+        TabSwitchHUD.shared.show(next: next)
+    }
+}
+
+// MARK: - Tab Switch HUD
+
+class TabSwitchHUD {
+    static let shared = TabSwitchHUD()
+    
+    private var hudWindow: NSPanel?
+    private var dismissTimer: Timer?
+    private var arrowLabel: NSTextField?
+    private var textLabel: NSTextField?
+    
+    private func createWindow() {
+        let hudWidth: CGFloat = 180
+        let hudHeight: CGFloat = 90
+        
+        guard let screen = NSScreen.main else { return }
+        let screenFrame = screen.visibleFrame
+        let x = screenFrame.midX - hudWidth / 2
+        let y = screenFrame.midY - hudHeight / 2 + 80
+        
+        let panel = NSPanel(
+            contentRect: NSRect(x: x, y: y, width: hudWidth, height: hudHeight),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.level = .floating
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        
+        // Vibrancy background (native macOS HUD style)
+        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: hudWidth, height: hudHeight))
+        visualEffect.material = .hudWindow
+        visualEffect.state = .active
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.wantsLayer = true
+        visualEffect.layer?.cornerRadius = 16
+        visualEffect.layer?.masksToBounds = true
+        
+        // Arrow indicator
+        let arrow = NSTextField(labelWithString: "▶")
+        arrow.font = NSFont.systemFont(ofSize: 34, weight: .ultraLight)
+        arrow.textColor = .white
+        arrow.alignment = .center
+        arrow.frame = NSRect(x: 0, y: 32, width: hudWidth, height: 42)
+        
+        // Direction text
+        let text = NSTextField(labelWithString: "Next Tab")
+        text.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        text.textColor = NSColor.white.withAlphaComponent(0.75)
+        text.alignment = .center
+        text.frame = NSRect(x: 0, y: 10, width: hudWidth, height: 18)
+        
+        visualEffect.addSubview(arrow)
+        visualEffect.addSubview(text)
+        panel.contentView = visualEffect
+        
+        self.hudWindow = panel
+        self.arrowLabel = arrow
+        self.textLabel = text
+    }
+    
+    func show(next: Bool) {
+        guard UserDefaults.standard.bool(forKey: "showHUD") else { return }
+        
+        DispatchQueue.main.async {
+            if self.hudWindow == nil {
+                self.createWindow()
+            }
+            
+            // Update content
+            self.arrowLabel?.stringValue = next ? "▶" : "◀"
+            self.textLabel?.stringValue = next ? "Next Tab" : "Previous Tab"
+            
+            // Reset dismiss timer
+            self.dismissTimer?.invalidate()
+            
+            // Fade in
+            self.hudWindow?.alphaValue = 0
+            self.hudWindow?.orderFrontRegardless()
+            
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                self.hudWindow?.animator().alphaValue = 1.0
+            }
+            
+            // Auto-dismiss after 0.6s
+            self.dismissTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.3
+                    self.hudWindow?.animator().alphaValue = 0.0
+                }) {
+                    self.hudWindow?.orderOut(nil)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Onboarding Window
+
+class OnboardingWindowController: NSObject {
+    
+    private var window: NSWindow?
+    
+    func showIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") else { return }
+        showWindow()
+    }
+    
+    func showWindow() {
+        let windowWidth: CGFloat = 520
+        let windowHeight: CGFloat = 480
+        
+        guard let screen = NSScreen.main else { return }
+        let screenFrame = screen.visibleFrame
+        let x = screenFrame.midX - windowWidth / 2
+        let y = screenFrame.midY - windowHeight / 2
+        
+        let win = NSWindow(
+            contentRect: NSRect(x: x, y: y, width: windowWidth, height: windowHeight),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        win.title = "Welcome to SlideTabSafari"
+        win.isReleasedWhenClosed = false
+        win.center()
+        
+        // Background with vibrancy
+        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight))
+        visualEffect.material = .windowBackground
+        visualEffect.state = .active
+        visualEffect.blendingMode = .behindWindow
+        win.contentView = visualEffect
+        
+        // --- Title ---
+        let titleLabel = NSTextField(labelWithString: "SlideTabSafari")
+        titleLabel.font = NSFont.systemFont(ofSize: 28, weight: .bold)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .center
+        titleLabel.frame = NSRect(x: 0, y: windowHeight - 65, width: windowWidth, height: 36)
+        visualEffect.addSubview(titleLabel)
+        
+        let subtitleLabel = NSTextField(labelWithString: "Switch Safari tabs with trackpad gestures")
+        subtitleLabel.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        subtitleLabel.frame = NSRect(x: 0, y: windowHeight - 90, width: windowWidth, height: 20)
+        visualEffect.addSubview(subtitleLabel)
+        
+        // --- Step Cards ---
+        let cardWidth: CGFloat = windowWidth - 60
+        let cardHeight: CGFloat = 80
+        let cardX: CGFloat = 30
+        var cardY: CGFloat = windowHeight - 190
+        
+        // Step 1: Gesture
+        let step1 = createStepCard(
+            frame: NSRect(x: cardX, y: cardY, width: cardWidth, height: cardHeight),
+            icon: "\u{1F91A}",  // 🤚
+            title: "Swipe to Switch Tabs",
+            detail: "Perform a two-finger horizontal swipe on your trackpad\nto move between Safari tabs instantly."
+        )
+        visualEffect.addSubview(step1)
+        
+        // Step 2: Safari
+        cardY -= (cardHeight + 16)
+        let step2 = createStepCard(
+            frame: NSRect(x: cardX, y: cardY, width: cardWidth, height: cardHeight),
+            icon: "\u{1F310}",  // 🌐
+            title: "Replaces Back/Forward Navigation",
+            detail: "The app intercepts Safari's default history swipe and\nreplaces it with tab switching. No more accidental page jumps."
+        )
+        visualEffect.addSubview(step2)
+        
+        // Step 3: Permissions
+        cardY -= (cardHeight + 16)
+        let step3 = createStepCard(
+            frame: NSRect(x: cardX, y: cardY, width: cardWidth, height: cardHeight),
+            icon: "\u{1F512}",  // 🔒
+            title: "Grant Accessibility Permission",
+            detail: "Go to System Settings → Privacy & Security → Accessibility\nand enable SlideTabSafari. The app will wait automatically."
+        )
+        visualEffect.addSubview(step3)
+        
+        // --- Get Started Button ---
+        let button = NSButton(title: "Get Started", target: self, action: #selector(onGetStarted(_:)))
+        button.bezelStyle = .rounded
+        button.controlSize = .large
+        button.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        button.frame = NSRect(x: (windowWidth - 160) / 2, y: 24, width: 160, height: 40)
+        button.keyEquivalent = "\r"
+        visualEffect.addSubview(button)
+        
+        // --- Footer ---
+        let footerLabel = NSTextField(labelWithString: "Runs silently in your menu bar  \u{21E5}")
+        footerLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        footerLabel.textColor = .tertiaryLabelColor
+        footerLabel.alignment = .center
+        footerLabel.frame = NSRect(x: 0, y: 72, width: windowWidth, height: 16)
+        visualEffect.addSubview(footerLabel)
+        
+        self.window = win
+        
+        // Temporarily show in Dock so the window is reachable
+        NSApp.setActivationPolicy(.regular)
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    private func createStepCard(frame: NSRect, icon: String, title: String, detail: String) -> NSView {
+        let card = NSView(frame: frame)
+        card.wantsLayer = true
+        card.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
+        card.layer?.cornerRadius = 12
+        card.layer?.borderWidth = 0.5
+        card.layer?.borderColor = NSColor.separatorColor.cgColor
+        
+        let iconLabel = NSTextField(labelWithString: icon)
+        iconLabel.font = NSFont.systemFont(ofSize: 28)
+        iconLabel.frame = NSRect(x: 16, y: (frame.height - 34) / 2, width: 40, height: 34)
+        card.addSubview(iconLabel)
+        
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.frame = NSRect(x: 64, y: frame.height - 30, width: frame.width - 80, height: 20)
+        card.addSubview(titleLabel)
+        
+        let detailLabel = NSTextField(labelWithString: detail)
+        detailLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.maximumNumberOfLines = 2
+        detailLabel.frame = NSRect(x: 64, y: 8, width: frame.width - 80, height: 36)
+        card.addSubview(detailLabel)
+        
+        return card
+    }
+    
+    @objc private func onGetStarted(_ sender: NSButton) {
+        UserDefaults.standard.set(true, forKey: "hasSeenOnboarding")
+        
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            self.window?.animator().alphaValue = 0.0
+        }) {
+            self.window?.orderOut(nil)
+            self.window = nil
+            // Return to accessory mode (no Dock icon)
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
 
@@ -180,13 +437,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var lowSensitivityItem: NSMenuItem!
     var medSensitivityItem: NSMenuItem!
     var highSensitivityItem: NSMenuItem!
+    var hudToggleItem: NSMenuItem!
+    var onboardingController: OnboardingWindowController?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // Register default preference
         UserDefaults.standard.register(defaults: [
             "naturalSwipeDirection": true,
             "sensitivityLevel": 1,
-            "hideMenuIcon": false
+            "hideMenuIcon": false,
+            "showHUD": true,
+            "hasSeenOnboarding": false
         ])
         
         // Auto-enable Launch at Login on first run
@@ -202,6 +463,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !UserDefaults.standard.bool(forKey: "hideMenuIcon") {
             setupMenuBarIcon()
         }
+        
+        // Show onboarding on first launch
+        onboardingController = OnboardingWindowController()
+        onboardingController?.showIfNeeded()
         
         checkAccessibility()
     }
@@ -253,6 +518,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sensitivityItem.submenu = sensitivityMenu
         menu.addItem(sensitivityItem)
         
+        // Add HUD toggle
+        let isHUDEnabled = UserDefaults.standard.bool(forKey: "showHUD")
+        hudToggleItem = NSMenuItem(title: "Show Tab Switch HUD", action: #selector(toggleHUD(_:)), keyEquivalent: "")
+        hudToggleItem.state = isHUDEnabled ? .on : .off
+        menu.addItem(hudToggleItem)
+        
         menu.addItem(NSMenuItem.separator())
         
         // Add Launch at Login toggle
@@ -295,6 +566,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func changeSensitivity(_ sender: NSMenuItem) {
         UserDefaults.standard.set(sender.tag, forKey: "sensitivityLevel")
         updateSensitivityCheckmarks()
+    }
+    
+    @objc func toggleHUD(_ sender: NSMenuItem) {
+        let current = UserDefaults.standard.bool(forKey: "showHUD")
+        let newValue = !current
+        UserDefaults.standard.set(newValue, forKey: "showHUD")
+        sender.state = newValue ? .on : .off
     }
     
     func updateSensitivityCheckmarks() {
