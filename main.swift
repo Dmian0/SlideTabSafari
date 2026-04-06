@@ -295,13 +295,13 @@ class OnboardingWindowController: NSObject {
         )
         visualEffect.addSubview(step1)
         
-        // Step 2: Safari
+        // Step 2: Multi-browser
         cardY -= (cardHeight + 16)
         let step2 = createStepCard(
             frame: NSRect(x: cardX, y: cardY, width: cardWidth, height: cardHeight),
             icon: "\u{1F310}",  // 🌐
-            title: "Replaces Back/Forward Navigation",
-            detail: "The app intercepts Safari's default history swipe and\nreplaces it with tab switching. No more accidental page jumps."
+            title: "Works with All Major Browsers",
+            detail: "Safari, Chrome, Brave, Arc, Firefox, Edge and more.\nSwipe to switch tabs in any supported browser."
         )
         visualEffect.addSubview(step2)
         
@@ -384,6 +384,58 @@ class OnboardingWindowController: NSObject {
     }
 }
 
+// MARK: - Browser Registry
+
+struct BrowserInfo {
+    let bundleId: String
+    let name: String
+}
+
+class BrowserRegistry {
+    static let shared = BrowserRegistry()
+    
+    let supportedBrowsers: [BrowserInfo] = [
+        BrowserInfo(bundleId: "com.apple.Safari", name: "Safari"),
+        BrowserInfo(bundleId: "com.apple.SafariTechnologyPreview", name: "Safari Technology Preview"),
+        BrowserInfo(bundleId: "com.google.Chrome", name: "Google Chrome"),
+        BrowserInfo(bundleId: "com.google.Chrome.canary", name: "Chrome Canary"),
+        BrowserInfo(bundleId: "com.brave.Browser", name: "Brave"),
+        BrowserInfo(bundleId: "company.thebrowser.Browser", name: "Arc"),
+        BrowserInfo(bundleId: "org.mozilla.firefox", name: "Firefox"),
+        BrowserInfo(bundleId: "com.microsoft.edgemac", name: "Microsoft Edge"),
+        BrowserInfo(bundleId: "com.operasoftware.Opera", name: "Opera"),
+        BrowserInfo(bundleId: "com.vivaldi.Vivaldi", name: "Vivaldi"),
+    ]
+    
+    /// Returns the UserDefaults key for a given browser bundle ID.
+    private func key(for bundleId: String) -> String {
+        return "browser_\(bundleId)"
+    }
+    
+    /// Check if a browser is enabled. Defaults to true for all browsers.
+    func isEnabled(_ bundleId: String) -> Bool {
+        let k = key(for: bundleId)
+        // If the key has never been set, default to true
+        if UserDefaults.standard.object(forKey: k) == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: k)
+    }
+    
+    /// Check if a bundle ID belongs to a supported browser AND is enabled.
+    func isActiveBrowser(_ bundleId: String) -> Bool {
+        let isSupported = supportedBrowsers.contains { $0.bundleId == bundleId }
+        return isSupported && isEnabled(bundleId)
+    }
+    
+    /// Toggle a browser on/off.
+    func toggle(_ bundleId: String) -> Bool {
+        let newValue = !isEnabled(bundleId)
+        UserDefaults.standard.set(newValue, forKey: key(for: bundleId))
+        return newValue
+    }
+}
+
 // MARK: - CGEvent Tap Callback (C-level function)
 
 func eventTapCallback(
@@ -410,9 +462,10 @@ func eventTapCallback(
     // Safely unwrap phases if needed
 
     
-    // Only act when Safari is frontmost
+    // Only act when a supported browser is frontmost
     guard let activeApp = NSWorkspace.shared.frontmostApplication,
-          activeApp.bundleIdentifier == "com.apple.Safari" else {
+          let bundleId = activeApp.bundleIdentifier,
+          BrowserRegistry.shared.isActiveBrowser(bundleId) else {
         return Unmanaged.passUnretained(event)
     }
     
@@ -490,7 +543,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "SlideTabSafari v2", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "SlideTabSafari v3", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         
         // Add Swipe Direction toggle
@@ -523,6 +576,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hudToggleItem = NSMenuItem(title: "Show Tab Switch HUD", action: #selector(toggleHUD(_:)), keyEquivalent: "")
         hudToggleItem.state = isHUDEnabled ? .on : .off
         menu.addItem(hudToggleItem)
+        
+        // Add Browsers submenu
+        let browsersItem = NSMenuItem(title: "Browsers", action: nil, keyEquivalent: "")
+        let browsersMenu = NSMenu()
+        for browser in BrowserRegistry.shared.supportedBrowsers {
+            let item = NSMenuItem(title: browser.name, action: #selector(toggleBrowser(_:)), keyEquivalent: "")
+            item.representedObject = browser.bundleId
+            item.state = BrowserRegistry.shared.isEnabled(browser.bundleId) ? .on : .off
+            browsersMenu.addItem(item)
+        }
+        browsersItem.submenu = browsersMenu
+        menu.addItem(browsersItem)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -566,6 +631,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func changeSensitivity(_ sender: NSMenuItem) {
         UserDefaults.standard.set(sender.tag, forKey: "sensitivityLevel")
         updateSensitivityCheckmarks()
+    }
+    
+    @objc func toggleBrowser(_ sender: NSMenuItem) {
+        guard let bundleId = sender.representedObject as? String else { return }
+        let newValue = BrowserRegistry.shared.toggle(bundleId)
+        sender.state = newValue ? .on : .off
     }
     
     @objc func toggleHUD(_ sender: NSMenuItem) {
